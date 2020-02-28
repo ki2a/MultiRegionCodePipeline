@@ -29,25 +29,20 @@
             "inline": [
                 "sudo yum update -y",
                 "sudo yum install java -y",
-                "wget http://apachemirror.wuchna.com/tomcat/tomcat-8/v8.5.50/bin/apache-tomcat-8.5.50.tar.gz",
-                "tar -xvf apache-tomcat-8.5.50.tar.gz",
-                "./apache-tomcat-8.5.50/bin/startup.sh",
-				        "sudo /usr/sbin/update-motd --disable",
-                "echo 'No unauthorized access permitted' | sudo tee /etc/motd",
-                "sudo rm /etc/issue",
-                "sudo ln -s /etc/motd /etc/issue",
-                "sudo yum install -y elinks screen"
+                "wget https://archive.apache.org/dist/tomcat/tomcat-8/v8.5.51/bin/apache-tomcat-8.5.51.tar.gz",
+                "tar -xvf apache-tomcat-8.5.51.tar.gz",
+                "./apache-tomcat-8.5.51/bin/startup.sh"
             ]
         },
         {
           "type":"file",
            "source":"target/hello-0.0.1-SNAPSHOT.war",
-           "destination":"/home/ec2-user/apache-tomcat-8.5.50/webapps/hello.war"
+           "destination":"/home/ec2-user/apache-tomcat-8.5.51/webapps/hello.war"
         },
         {
           "type":"shell",
            "inline":[
-             "sh /home/ec2-user/apache-tomcat-8.5.50/bin/startup.sh"
+             "sh /home/ec2-user/apache-tomcat-8.5.51/bin/startup.sh"
            ]
         }
     ]
