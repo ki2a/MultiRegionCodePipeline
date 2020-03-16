@@ -1,2 +1,2 @@
 # MultiRegionCodePipeline
-Multi Region Deployment for AMI images using AWS CodePipeline
+Building CI/CD pipeline for multi region deployment with AWS CodePipeline
