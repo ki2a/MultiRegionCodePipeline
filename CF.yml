@@ -1,0 +1,410 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Template for creating SFTP server with user and role.
+Parameters:
+  S3BucketName:
+    Type: String
+    Description: S3Bucket for source.zip
+    Default: testcloudformation1
+  S3BucketNameForOtherRegion1:
+    Type: String
+    Description: S3Bucket for artifact store
+    Default: test-bucket-cf-211
+  S3BucketNameForOtherRegion2:
+    Type: String
+    Description: S3Bucket for source.zip
+    Default: test-bucket-cf-221
+  OtherRegion1:
+    Type: String
+    Description: TargetRegion1 other than current region.
+    Default: us-east-2
+  OtherRegion2:
+    Type: String
+    Description: TargetRegion2 other than current region.
+    Default: ap-south-1
+  SourceS3ObjectKey:
+    Type: String
+    Description: Source zip name
+    Default: source.zip
+Resources:
+  AppPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      Stages:
+        -
+          Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: S3
+              OutputArtifacts:
+                - Name: Source
+              Configuration:
+                S3Bucket:
+                  !Ref S3BucketName
+                S3ObjectKey:
+                  !Ref SourceS3ObjectKey
+              RunOrder: 1
+        -
+          Name: StaticCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref StaticCodeAnalysisProject
+              RunOrder: 2
+        -
+          Name: SecurityCodeAnalysis
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref SecurityCodeAnalysisProject
+              RunOrder: 3
+
+        -
+          Name: Build
+          Actions:
+            - Name: BuildAction
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: '1'
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: !Ref CodeBuildProject
+              RunOrder: 4
+        -
+          Name: Copy
+          Actions:
+            - Name: CopyAction
+              InputArtifacts:
+                 - Name: Source
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Version: '1'
+                Provider: Lambda
+              Configuration:
+                FunctionName: !Ref CopyImage
+                UserParameters: !Join
+                  - ','
+                  - - !Ref OtherRegion1
+                    - !Ref OtherRegion2
+              RunOrder: 5
+        -
+          Name: Provision
+          Actions:
+            - Name: !Ref "AWS::Region"
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: !Join
+                  - '-'
+                  - - !Ref 'AWS::StackName'
+                    - TestStack1
+                TemplatePath: Source::CF/MultiRegionDeployment.yml
+              RunOrder: 6
+              Region: !Ref "AWS::Region"
+            - Name: !Ref OtherRegion1
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: !Join
+                  - '-'
+                  - - !Ref 'AWS::StackName'
+                    - TestStack1
+                TemplatePath: Source::CF/MultiRegionDeployment.yml
+              RunOrder: 6
+              Region: !Ref OtherRegion1
+            - Name: !Ref OtherRegion2
+              InputArtifacts:
+                - Name: Source
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !GetAtt CloudFormationServiceRole.Arn
+                Capabilities: CAPABILITY_IAM,CAPABILITY_AUTO_EXPAND
+                StackName: !Join
+                  - '-'
+                  - - !Ref 'AWS::StackName'
+                    - TestStack1
+                TemplatePath: Source::CF/MultiRegionDeployment.yml
+              RunOrder: 6
+              Region: !Ref OtherRegion2
+      ArtifactStores:
+        - Region: !Ref "AWS::Region"
+          ArtifactStore:
+            Type: S3
+            Location: !Ref S3BucketName
+        - Region: !Ref OtherRegion1
+          ArtifactStore:
+            Type: S3
+            Location: !Ref S3BucketNameForOtherRegion1
+        - Region: !Ref OtherRegion2
+          ArtifactStore:
+            Type: S3
+            Location: !Ref S3BucketNameForOtherRegion2
+  CopyImage:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: Function for copy images
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaServiceRole.Arn
+      Runtime: python2.7
+      Timeout: 900
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import time
+
+          def lambda_handler(event, context):
+              regions = event['CodePipeline.job']['data']['actionConfiguration']['configuration']['UserParameters']
+              target_regions = regions.split(',')
+
+              client = boto3.client('ssm')
+              value = client.get_parameter(Name='AMI_VERSION', WithDecryption=True)
+              ami_id = value['Parameter']['Value']
+              source_region = client.meta.region_name
+
+              # Copy Images
+              for target_region in target_regions:
+                  print('Copying image in region: ', target_region)
+                  dest_image_client = boto3.client('ec2', target_region)
+                  response = dest_image_client.copy_image(
+                      Name='Test',
+                      SourceImageId=ami_id,
+                      SourceRegion=source_region
+                  )
+                  ssm_target_paramter_region = boto3.client('ssm', target_region)
+                  try:
+                      ssm_target_paramter_region.delete_parameter(Name='AMI_VERSION')
+                  except:
+                      print('Ignoring exception as first time its expected')
+                  ssm_target_paramter_region.put_parameter(Name='AMI_VERSION', Type='String', Value=response['ImageId'])
+
+              time.sleep(600) # Add delay for giving time for AMI copy, waiter can serve the purpose better
+              codepipeline_event = boto3.client('codepipeline')
+              codepipeline_event.put_job_success_result(jobId=event['CodePipeline.job']['id'])
+  StaticCodeAnalysisProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Static Code Analysis Build Project
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/python:3.6.5
+        Type: LINUX_CONTAINER
+      ServiceRole: !Ref 'CodeBuildServiceRole'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - pip install --upgrade pip
+                - env && ls -l && python --version
+                - pip install cfn-lint
+                - aws --version
+                - cfn-lint CF/*.yml
+  SecurityCodeAnalysisProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Static Code Analysis Build Project
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:2.0-19.11.26
+        Type: LINUX_CONTAINER
+      ServiceRole: !Ref 'CodeBuildServiceRole'
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                ruby: 2.6
+              commands:
+                - gem install cfn-nag
+                - cfn_nag_rules
+                - cfn_nag CF/*.yml
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Description: Code Build Project for AWS CodeBuild
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:2.0-19.11.26
+        Type: LINUX_CONTAINER
+      ServiceRole: !Ref 'CodeBuildServiceRole'
+      Source:
+        Type: CODEPIPELINE
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: CodeBuildBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - s3:*
+                  - ec2:*
+                  - ssm:*
+                Resource: '*'
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CodeBuildRole
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+      Policies:
+        - PolicyName: CodePipelineBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - s3:*
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - ec2:*
+                  - ssm:*
+                  - lambda:*
+                  - cloudformation:*
+                Resource: '*'
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CodePipelineRole
+  LambdaServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Policies:
+        - PolicyName: LambdaBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codepipeline:PutJobSuccessResult
+                  - codepipeline:PutJobFailureResult
+                  - logs:*
+                  - ec2:*
+                  - ssm:*
+                Resource: '*'
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - LambdaRole
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+      Policies:
+        - PolicyName: CodePipelineBasePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:*
+                  - logs:*
+                  - ec2:*
+                  - ssm:*
+                Resource: '*'
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CloudFormationRole
