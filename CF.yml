@@ -1,30 +1,27 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Template for creating SFTP server with user and role.
 Parameters:
-  S3BucketName:
+  RepositoryName:
     Type: String
-    Description: S3Bucket for source.zip
-    Default: testcloudformation1
+    Description: Repository Name of the project
+  RepositoryBranch:
+    Type: String
+    Description: Branch name of repository
   S3BucketNameForOtherRegion1:
     Type: String
-    Description: S3Bucket for artifact store
-    Default: test-bucket-cf-211
+    Description: S3Bucket for ArtifactStore in TargetRegion1
   S3BucketNameForOtherRegion2:
     Type: String
-    Description: S3Bucket for source.zip
-    Default: test-bucket-cf-221
+    Description: S3Bucket for ArtifactStore in TargetRegion2
   OtherRegion1:
     Type: String
     Description: TargetRegion1 other than current region.
-    Default: us-east-2
   OtherRegion2:
     Type: String
     Description: TargetRegion2 other than current region.
-    Default: ap-south-1
-  SourceS3ObjectKey:
+  S3BucketName:
     Type: String
-    Description: Source zip name
-    Default: source.zip
+    Description: S3Bucket for ArtifactStore
 Resources:
   AppPipeline:
     Type: AWS::CodePipeline::Pipeline
@@ -39,14 +36,14 @@ Resources:
                 Category: Source
                 Owner: AWS
                 Version: '1'
-                Provider: S3
+                Provider: CodeCommit
               OutputArtifacts:
                 - Name: Source
               Configuration:
-                S3Bucket:
-                  !Ref S3BucketName
-                S3ObjectKey:
-                  !Ref SourceS3ObjectKey
+                BranchName:
+                  !Ref RepositoryBranch
+                RepositoryName:
+                  !Ref RepositoryName
               RunOrder: 1
         -
           Name: StaticCodeAnalysis
@@ -234,7 +231,7 @@ Resources:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/python:3.6.5
         Type: LINUX_CONTAINER
-      ServiceRole: !Ref 'CodeBuildServiceRole'
+      ServiceRole: !Ref 'StaticCodeAnalysisServiceRole'
       Source:
         Type: CODEPIPELINE
         BuildSpec: |
@@ -257,7 +254,7 @@ Resources:
         ComputeType: BUILD_GENERAL1_SMALL
         Image: aws/codebuild/amazonlinux2-x86_64-standard:2.0-19.11.26
         Type: LINUX_CONTAINER
-      ServiceRole: !Ref 'CodeBuildServiceRole'
+      ServiceRole: !Ref 'SecurityCodeAnalysisServiceRole'
       Source:
         Type: CODEPIPELINE
         BuildSpec: |
@@ -283,6 +280,70 @@ Resources:
       ServiceRole: !Ref 'CodeBuildServiceRole'
       Source:
         Type: CODEPIPELINE
+  SecurityCodeAnalysisServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: SecurityCodeAnalysisPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - s3:*
+                Resource: '*'
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - SecurityCodeAnalysisRole
+  StaticCodeAnalysisServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+      Policies:
+        - PolicyName: StaticCodeAnalysisPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                  - logs:*
+                  - s3:*
+                Resource: '*'
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - StaticCodeAnalysisRole
   CodeBuildServiceRole:
     Type: AWS::IAM::Role
     Properties:
@@ -344,6 +405,7 @@ Resources:
                   - ssm:*
                   - lambda:*
                   - cloudformation:*
+                  - codecommit:*
                 Resource: '*'
       Path: /
       RoleName: !Join

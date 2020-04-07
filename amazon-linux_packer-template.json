@@ -28,7 +28,9 @@
             "type": "shell",
             "inline": [
                 "sudo yum update -y",
-                "sudo yum install java -y",
+                "sudo yum install java-1.8.0 -y",
+                "export JAVA_HOME=/usr/lib/jvm/jre-1.8.0",
+                "PATH=$JAVA_HOME/bin:$PATH",
                 "wget https://archive.apache.org/dist/tomcat/tomcat-8/v8.5.51/bin/apache-tomcat-8.5.51.tar.gz",
                 "tar -xvf apache-tomcat-8.5.51.tar.gz",
                 "./apache-tomcat-8.5.51/bin/startup.sh"
@@ -42,7 +44,7 @@
         {
           "type":"shell",
            "inline":[
-             "sh /home/ec2-user/apache-tomcat-8.5.51/bin/startup.sh"
+             "/home/ec2-user/apache-tomcat-8.5.51/bin/startup.sh"
            ]
         }
     ]
